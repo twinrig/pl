@@ -1,0 +1,12 @@
+node_modules
+dist
+.output
+.env
+.env.*
+.grok
+artifacts
+screenshots
+attachments
+*.log
+.DS_Store
+/Play-Log.html
