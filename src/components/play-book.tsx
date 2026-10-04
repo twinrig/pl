@@ -290,6 +290,7 @@ type GameRecord = {
 type PastSeason = {
   id: string;
   stopped: string;
+  label?: string;
   games: GameRecord[];
   activeId: string;
 };
@@ -344,43 +345,54 @@ function readGame(game: Partial<GameRecord> | undefined): GameRecord | null {
   };
 }
 
+function seasonLabel(games: GameRecord[], stopped: string): string {
+  const dates = games.map((game) => game.date).filter(Boolean).sort();
+  const year = (dates[0] || stopped).slice(0, 4);
+  const home = games[0]?.book.teams[0]?.name?.trim() || "Season";
+  return `${year} ${home}`;
+}
+
+function seasonFromParsed(parsed: Partial<Season> & { season?: Partial<Season> }): Season | null {
+  const body = parsed.season && Array.isArray(parsed.season.games) ? parsed.season : parsed;
+  if (!Array.isArray(body.games) || body.games.length === 0) return null;
+  const games = body.games.map((game) => readGame(game)).filter((game) => game !== null);
+  if (games.length === 0) return null;
+  const activeId = games.some((game) => game.id === body.activeId) ? body.activeId! : games[0].id;
+  const past = Array.isArray(body.past)
+    ? body.past
+        .map((item) => {
+          const itemGames = (item.games ?? [])
+            .map((game) => readGame(game))
+            .filter((game) => game !== null);
+          if (itemGames.length === 0) return null;
+          const stopped = item.stopped || today();
+          return {
+            id: item.id || crypto.randomUUID(),
+            stopped,
+            label: item.label || seasonLabel(itemGames, stopped),
+            games: itemGames,
+            activeId: itemGames.some((game) => game.id === item.activeId)
+              ? item.activeId
+              : itemGames[0].id,
+          };
+        })
+        .filter((item) => item !== null)
+    : [];
+  return {
+    id: body.id || crypto.randomUUID(),
+    closed: Boolean(body.closed),
+    games,
+    activeId,
+    past,
+  };
+}
+
 function loadSeason(): Season | null {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
-      const parsed = JSON.parse(raw) as Season & { games?: GameRecord[] };
-      if (Array.isArray(parsed.games) && parsed.games.length > 0) {
-        const games = parsed.games.map((game) => readGame(game)).filter((game) => game !== null);
-        if (games.length === 0) return null;
-        const activeId = games.some((game) => game.id === parsed.activeId)
-          ? parsed.activeId
-          : games[0].id;
-        const past = Array.isArray(parsed.past)
-          ? parsed.past
-              .map((item) => {
-                const itemGames = (item.games ?? [])
-                  .map((game) => readGame(game))
-                  .filter((game) => game !== null);
-                if (itemGames.length === 0) return null;
-                return {
-                  id: item.id || crypto.randomUUID(),
-                  stopped: item.stopped || today(),
-                  games: itemGames,
-                  activeId: itemGames.some((game) => game.id === item.activeId)
-                    ? item.activeId
-                    : itemGames[0].id,
-                };
-              })
-              .filter((item) => item !== null)
-          : [];
-        return {
-          id: parsed.id || crypto.randomUUID(),
-          closed: Boolean(parsed.closed),
-          games,
-          activeId,
-          past,
-        };
-      }
+      const saved = seasonFromParsed(JSON.parse(raw) as Season);
+      if (saved) return saved;
     }
     const legacy = localStorage.getItem(LEGACY_KEY);
     if (!legacy) return null;
@@ -419,6 +431,8 @@ export function PlayBook() {
   const [confirmingNew, setConfirmingNew] = useState(false);
   const [confirming, setConfirming] = useState<null | "final" | "stop" | "start">(null);
   const [seasonOpen, setSeasonOpen] = useState(false);
+  const [backupNote, setBackupNote] = useState("");
+  const [pendingBackup, setPendingBackup] = useState<Season | null>(null);
   const [exportOpen, setExportOpen] = useState(false);
   const [copied, setCopied] = useState(false);
 
@@ -835,12 +849,15 @@ export function PlayBook() {
         seriesTeamId: homeId,
         seriesYard: "40",
       });
+      const stopped = today();
+      const games = current.games.map((item) => ({ ...item, final: true }));
       const past = [
         ...current.past,
         {
           id: current.id,
-          stopped: today(),
-          games: current.games.map((item) => ({ ...item, final: true })),
+          stopped,
+          label: seasonLabel(games, stopped),
+          games,
           activeId: current.activeId,
         },
       ];
@@ -856,6 +873,8 @@ export function PlayBook() {
     setSeason((current) => {
       const found = current.past.find((item) => item.id === id);
       if (!found) return current;
+      const stopped = today();
+      const games = current.games.map((game) => ({ ...game, final: true }));
       return {
         id: found.id,
         closed: true,
@@ -865,8 +884,9 @@ export function PlayBook() {
           ...current.past.filter((item) => item.id !== id),
           {
             id: current.id,
-            stopped: today(),
-            games: current.games.map((game) => ({ ...game, final: true })),
+            stopped,
+            label: seasonLabel(games, stopped),
+            games,
             activeId: current.activeId,
           },
         ],
@@ -937,6 +957,42 @@ export function PlayBook() {
     return [header.join(","), ...rows].join("\n");
   }
 
+  function downloadBackup() {
+    const file = {
+      version: 1,
+      savedAt: new Date().toISOString(),
+      season,
+    };
+    const blob = new Blob([JSON.stringify(file)], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `play-log-backup-${today()}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(a.href);
+    const years = new Set([
+      ...season.games.map((game) => game.date.slice(0, 4)),
+      ...season.past.flatMap((item) => item.games.map((game) => game.date.slice(0, 4))),
+    ]);
+    setBackupNote(
+      `Saved ${season.past.length + 1} season${season.past.length === 0 ? "" : "s"} (${[...years].filter(Boolean).join(", ")}). Keep this file.`,
+    );
+  }
+
+  function chooseBackup(text: string) {
+    try {
+      const saved = seasonFromParsed(JSON.parse(text) as Season);
+      if (!saved) {
+        setBackupNote("That file is not a play log backup.");
+        return;
+      }
+      setPendingBackup(saved);
+      setBackupNote("");
+    } catch {
+      setBackupNote("That file is not a play log backup.");
+    }
+  }
   function downloadCsv() {
     const blob = new Blob([csvText()], { type: "text/csv" });
     const a = document.createElement("a");
@@ -2047,6 +2103,33 @@ export function PlayBook() {
           >
             <h2 className="mb-1 text-lg font-semibold">Season</h2>
             <p className="mb-3 text-sm text-muted">
+              The browser copy can be wiped. Save a backup file to keep every season. Load that file on this or another computer.
+            </p>
+            <div className="mb-4 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={downloadBackup}
+                className="h-11 rounded-lg bg-accent px-4 text-sm font-bold text-ink"
+              >
+                Save backup
+              </button>
+              <label className="flex h-11 cursor-pointer items-center rounded-lg border border-line px-4 text-sm font-semibold">
+                Load backup
+                <input
+                  type="file"
+                  accept="application/json,.json"
+                  className="sr-only"
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    event.target.value = "";
+                    if (!file) return;
+                    void file.text().then(chooseBackup);
+                  }}
+                />
+              </label>
+            </div>
+            {backupNote && <p className="mb-3 text-sm text-muted">{backupNote}</p>}
+            <p className="mb-3 text-sm text-muted">
               {season.closed ? "Stopped." : "Open."} {season.games.length} game
               {season.games.length === 1 ? "" : "s"}.
               {season.past.length > 0 ? ` ${season.past.length} saved season${season.past.length === 1 ? "" : "s"}.` : ""}
@@ -2120,7 +2203,7 @@ export function PlayBook() {
                       onClick={() => openPast(item.id)}
                       className="rounded-xl border border-line px-3 py-2 text-left text-sm"
                     >
-                      Stopped {item.stopped} · {item.games.length} game
+                      Stopped {item.stopped} · {item.label || seasonLabel(item.games, item.stopped)} · {item.games.length} game
                       {item.games.length === 1 ? "" : "s"}
                     </button>
                   ))}
@@ -2149,6 +2232,40 @@ export function PlayBook() {
                 className="h-11 rounded-lg border border-line px-4 text-sm font-semibold"
               >
                 Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {pendingBackup && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-bg/80 p-4">
+          <div className="w-full max-w-sm rounded-2xl border border-line bg-surface p-4">
+            <h2 className="mb-2 text-lg font-semibold">Load backup</h2>
+            <p className="mb-4 text-sm text-muted">
+              Replace what is in this browser with the file. It has {pendingBackup.past.length + 1} season
+              {pendingBackup.past.length === 0 ? "" : "s"} and {pendingBackup.games.length} game
+              {pendingBackup.games.length === 1 ? "" : "s"} in the open season.
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setPendingBackup(null)}
+                className="h-11 rounded-lg border border-line px-4 text-sm font-semibold text-muted"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setSeason(pendingBackup);
+                  setPendingBackup(null);
+                  setBackupNote("Backup loaded.");
+                  setEditing(null);
+                  setSpecial(null);
+                }}
+                className="h-11 rounded-lg bg-accent px-4 text-sm font-bold text-ink"
+              >
+                Load
               </button>
             </div>
           </div>
