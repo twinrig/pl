@@ -10,3 +10,14 @@ attachments
 *.log
 .DS_Store
 /Play-Log.html
+
+# Flutter
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+.pub/
+build/
+*.iml
+.idea/
