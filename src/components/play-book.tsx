@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { withOgorman } from "@/lib/ogorman";
 import { gameStats, teamScores } from "@/lib/stats";
 import { withWashington } from "@/lib/washington";
@@ -435,6 +435,9 @@ export function PlayBook() {
   const [pendingBackup, setPendingBackup] = useState<Season | null>(null);
   const [exportOpen, setExportOpen] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [canDownload, setCanDownload] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
 
   function setBook(update: Book | ((book: Book) => Book)) {
     setSeason((current) => ({
@@ -461,6 +464,7 @@ export function PlayBook() {
   useEffect(() => {
     const saved = loadSeason();
     if (saved) setSeason(saved);
+    setCanDownload(window.location.protocol !== "file:");
     setHydrated(true);
   }, []);
 
@@ -468,6 +472,22 @@ export function PlayBook() {
     if (!hydrated) return;
     localStorage.setItem(STORAGE_KEY, JSON.stringify(season));
   }, [season, hydrated]);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    function onPointerDown(event: PointerEvent) {
+      if (!menuRef.current?.contains(event.target as Node)) setMenuOpen(false);
+    }
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") setMenuOpen(false);
+    }
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [menuOpen]);
 
   const preview = useMemo(() => sentenceFrom(book, draft), [book, draft]);
 
@@ -1031,72 +1051,115 @@ export function PlayBook() {
           : "The down stands."
   }`;
 
+  const gameOpen = !active.final && !season.closed;
+
   return (
-    <div className="min-h-screen bg-bg text-fg">
-      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-4 py-4 sm:px-6">
-        <div>
-          <h1 className="text-xl font-semibold tracking-wide">Play Log</h1>
+    <div className="min-h-dvh bg-bg px-3 py-2 text-fg lg:flex lg:h-dvh lg:flex-col lg:overflow-hidden">
+      <header className="flex items-center gap-3">
+        <div className="min-w-0 flex-1">
+          <h1 className="text-[22px] leading-tight font-bold">Play Log</h1>
           <p className="text-sm text-muted">
             Type jersey numbers. A known number becomes Name (number).
           </p>
         </div>
-        <div className="flex flex-wrap gap-2">
+        <div className="relative" ref={menuRef}>
           <button
             type="button"
-            onClick={() => setSeasonOpen(true)}
-            className="h-11 rounded-lg border border-line bg-raised px-4 text-sm font-semibold"
+            aria-haspopup="menu"
+            aria-expanded={menuOpen}
+            onClick={() => setMenuOpen((open) => !open)}
+            className="h-10 rounded-lg border border-line bg-raised px-3 text-sm font-semibold"
           >
-            Season
+            Menu
           </button>
-          <button
-            type="button"
-            onClick={() => setTeamsOpen(true)}
-            className="h-11 rounded-lg border border-line bg-raised px-4 text-sm font-semibold"
-          >
-            Teams
-          </button>
-          <button
-            type="button"
-            onClick={() => setStatsOpen(true)}
-            className="h-11 rounded-lg border border-line bg-raised px-4 text-sm font-semibold"
-          >
-            Stats
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setCopied(false);
-              setExportOpen(true);
-            }}
-            className="h-11 rounded-lg border border-line bg-raised px-4 text-sm font-semibold"
-          >
-            Export CSV
-          </button>
-          {window.location.protocol !== "file:" && (
-            <a
-              href="/Play-Log.html"
-              download="Play-Log.html"
-              className="inline-flex h-11 items-center rounded-lg border border-line bg-raised px-4 text-sm font-semibold"
+          {menuOpen && (
+            <div
+              role="menu"
+              aria-label="Play Log"
+              className="absolute top-full right-0 z-30 mt-1 min-w-44 overflow-hidden rounded-lg border border-line bg-surface py-1"
             >
-              Download app
-            </a>
+              <button
+                type="button"
+                role="menuitem"
+                className="block w-full px-3 py-2.5 text-left text-sm font-semibold hover:bg-raised"
+                onClick={() => {
+                  setMenuOpen(false);
+                  setSeasonOpen(true);
+                }}
+              >
+                Season
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className="block w-full px-3 py-2.5 text-left text-sm font-semibold hover:bg-raised"
+                onClick={() => {
+                  setMenuOpen(false);
+                  setTeamsOpen(true);
+                }}
+              >
+                Teams
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className="block w-full px-3 py-2.5 text-left text-sm font-semibold hover:bg-raised"
+                onClick={() => {
+                  setMenuOpen(false);
+                  setStatsOpen(true);
+                }}
+              >
+                Stats
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className="block w-full px-3 py-2.5 text-left text-sm font-semibold hover:bg-raised"
+                onClick={() => {
+                  setMenuOpen(false);
+                  setCopied(false);
+                  setExportOpen(true);
+                }}
+              >
+                Export CSV
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                disabled={!gameOpen}
+                className="block w-full px-3 py-2.5 text-left text-sm font-semibold hover:bg-raised disabled:text-muted disabled:hover:bg-transparent"
+                onClick={() => {
+                  setMenuOpen(false);
+                  setConfirming("final");
+                }}
+              >
+                {active.final ? "Game final" : "Complete game"}
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                disabled={season.closed}
+                className="block w-full px-3 py-2.5 text-left text-sm font-semibold hover:bg-raised disabled:text-muted disabled:hover:bg-transparent"
+                onClick={() => {
+                  setMenuOpen(false);
+                  setConfirmingNew(true);
+                }}
+              >
+                New game
+              </button>
+              {canDownload && (
+                <a
+                  role="menuitem"
+                  href="/Play-Log.html"
+                  download="Play-Log.html"
+                  className="block w-full px-3 py-2.5 text-left text-sm font-semibold hover:bg-raised"
+                  onClick={() => setMenuOpen(false)}
+                >
+                  Download app
+                </a>
+              )}
+            </div>
           )}
-          <button
-            type="button"
-            onClick={() => setConfirming("final")}
-            disabled={active.final || season.closed}
-            className="h-11 rounded-lg border border-line bg-raised px-4 text-sm font-semibold disabled:opacity-40"
-          >
-            {active.final ? "Game final" : "Complete game"}
-          </button>
-          <button
-            type="button"
-            onClick={() => setConfirmingNew(true)}
-            disabled={season.closed}
-            className="h-11 rounded-lg border border-line bg-raised px-4 text-sm font-semibold disabled:opacity-40"
-          >
-            New game
-          </button>
         </div>
       </header>
 
@@ -1222,7 +1285,7 @@ export function PlayBook() {
         </div>
       )}
 
-      <main className="mx-auto flex max-w-6xl flex-col gap-4 p-4 sm:p-6">
+      <main className="mt-2 flex flex-col gap-2 lg:min-h-0 lg:flex-1">
           <FieldBoard
             offenseName={teamName(book, draft.offenseId)}
             defenseName={teamName(book, defenseId(book, draft.offenseId))}
@@ -1285,8 +1348,9 @@ export function PlayBook() {
               else placeBall(spot.teamId, spot.yard);
             }}
           />
+          <div className="flex flex-col gap-4 lg:min-h-0 lg:flex-1 lg:flex-row">
           <form
-            className="rounded-2xl border border-line bg-surface p-4"
+            className="rounded-2xl border border-line bg-surface p-4 lg:w-[min(800px,60%)] lg:shrink-0 lg:overflow-auto"
             onSubmit={(e) => {
               e.preventDefault();
               logPlay();
@@ -1698,17 +1762,18 @@ export function PlayBook() {
             </button>
           </form>
 
-          <section className="rounded-2xl border border-line bg-surface p-4">
-            <h2 className="mb-3 text-xs font-semibold tracking-wider text-muted uppercase">
+          <section className="rounded-2xl border border-line bg-surface p-4 lg:flex lg:min-h-0 lg:flex-1 lg:flex-col lg:overflow-hidden">
+            <h2 className="mb-3 text-xs font-semibold tracking-wider text-muted uppercase lg:shrink-0">
               Game log
             </h2>
+            <div className="lg:min-h-0 lg:flex-1 lg:overflow-auto lg:pr-1">
             {book.plays.length === 0 ? (
-              <p className="font-serif text-base leading-relaxed text-muted">
+              <p className="text-sm leading-snug text-muted">
                 Ball on the O'gorman 45. Pass from Cade Hermansom (3) to Rylan
                 Cody (4) tackled on the Washington 37 by 18,74.
               </p>
             ) : (
-              <ol className="flex flex-col gap-4">
+              <ol className="flex flex-col gap-3">
                 {book.plays.map((play, index) => (
                   <li key={play.id} className="border-b border-line pb-4 last:border-0">
                     <div className="mb-1 flex items-center justify-between gap-3 text-xs text-muted">
@@ -1735,12 +1800,14 @@ export function PlayBook() {
                         </button>
                       </span>
                     </div>
-                    <p className="font-serif text-lg leading-relaxed">{play.sentence}</p>
+                    <p className="text-sm leading-snug">{play.sentence}</p>
                   </li>
                 ))}
               </ol>
             )}
+            </div>
           </section>
+          </div>
       </main>
       {special === "kickoff" && (
         <div className="fixed inset-0 z-30 overflow-auto bg-bg/80 p-4">
